@@ -252,11 +252,16 @@ void FlirBlackFlySCameraControl::StreamByTrigger()
 	cvImgVec_.clear();
 
 	cvImgVec_.resize(numCam);
+
+
+	saveThreadVec_.push_back(std::thread(&FlirBlackFlySCameraControl::SaveImage, this));
 	
 	while(streaming_.load())
 	{
 
 		imageCnt++;
+
+		TP t0 = Time::now();
 
 #if 1
 		//trigger the camera via GPIO
@@ -269,34 +274,33 @@ void FlirBlackFlySCameraControl::StreamByTrigger()
 		gpioUnexport(pin16);
 #endif
 
+		//Mat concatImg;
+		//concatImg.create(2048, 2*2448, CV_8UC1);
+
 		//multi-threading ~40ms,	single thread ~50ms
 #if 1
-
-		TP t0 = Time::now();
-
 		grabThreadVec_.clear();
 		if(numCam > 1)
 		{
 			for(int i=1; i<camList_.GetSize(); i++)
 			{
 				CameraPtr pCam = pCamVec_[i];
-				grabThreadVec_.push_back(std::thread(&FlirBlackFlySCameraControl::GrabFrame, this, pCam, i));
+				grabThreadVec_.push_back(std::thread(&FlirBlackFlySCameraControl::GrabFrame, this, pCam, i/*, &concatImg*/));
 			}
 		}
 
-		GrabFrame(pCamVec_[0], 0);
+		GrabFrame(pCamVec_[0], 0/*, &concatImg*/);
 
 		for(auto &t : grabThreadVec_)
 			t.join();
 
 		grabThreadVec_.clear();
-
-		TP t1 = Time::now();
-		SecD duration = duration_cast<SecD>(t1-t0);
-		cout<<duration.count()<<" s\n";	
 #endif
-	
+
+
+		
 #if 0
+		// signle thread	
 		try
 		{
 			TP t0 = Time::now();
@@ -318,33 +322,75 @@ void FlirBlackFlySCameraControl::StreamByTrigger()
         }
 #endif
 
+		ImageNamePairVec imgNamePairVec;
+#if 1
+
 		for(int i=0; i<cvImgVec_.size(); i++)
 		{
+
+#if 0
 			Mat resizedImg;
 			resize(cvImgVec_[i], resizedImg, Size(), 0.25, 0.25);
 			string name = to_string(i);
 			imshow(SNVec_[i].c_str(), resizedImg);
 			waitKey(2);
+#endif
 
             // Create a unique filename
-            ostringstream filename;
-			
-			filename << "/media/agcypher/SSD/";
-			
-            filename << "Trigger-";
-            filename << SNVec_[i].c_str() << "-";
-            filename << imageCnt << ".jpg";
+            string filename = "/media/agcypher/SSD/data/Trigger-" + (string)SNVec_[i].c_str() + "-" + to_string(imageCnt) + ".pgm";
 
-            // Save image
-            //pResultImage->Save(filename.str().c_str());
-
-            //cout << "Image saved at " << filename.str() << endl;
+			imgNamePairVec.push_back(make_pair(cvImgVec_[i], filename));
+			//imgNamePairVec.push_back(make_pair(concatImg, filename));
 		}
-	}	
+
+#endif
+
+		saveMutex_.lock();
+		inpvVec_.push_back(imgNamePairVec);
+		std::cout<<"bs: "<< inpvVec_.size()<<" ";
+		
+		saveMutex_.unlock();
+
+		TP t1 = Time::now();
+		SecD duration = duration_cast<SecD>(t1-t0);
+		cout<<duration.count()<<" s\n";	
+	}
+
+	for(auto &t: saveThreadVec_)
+		t.join();
+
+	saveThreadVec_.clear();
 
 }
 
-void FlirBlackFlySCameraControl::GrabFrame(CameraPtr pCam, unsigned int cameraID)
+void FlirBlackFlySCameraControl::SaveImage()
+{
+	while(streaming_.load())
+	{
+		ImageNamePairVec imgNamePair;
+
+		saveMutex_.lock();
+
+		if(inpvVec_.size() > 0)
+		{
+			imgNamePair = inpvVec_.back();
+
+			inpvVec_.pop_back();
+		}
+
+		saveMutex_.unlock();
+
+		for(auto &imgName : imgNamePair)
+		{
+			imwrite(imgName.second, imgName.first);
+		}
+
+		usleep(1000);
+	}
+
+}
+
+void FlirBlackFlySCameraControl::GrabFrame(CameraPtr pCam, unsigned int cameraID/*, Mat *concatImg*/)
 {
     int result = 0;
     int err = 0;
@@ -363,19 +409,22 @@ void FlirBlackFlySCameraControl::GrabFrame(CameraPtr pCam, unsigned int cameraID
         }
         else
         {
-            ImagePtr convertedImage = pResultImage->Convert(PixelFormat_BGR8);
+            //ImagePtr convertedImage = pResultImage->Convert(PixelFormat_BGR8);
+			//ImagePtr convertedImage = pResultImage->Convert(PixelFormat_Mono8);
 
-            const auto XPadding = convertedImage->GetXPadding();
-            const auto YPadding = convertedImage->GetYPadding();
-            const auto rowsize = convertedImage->GetWidth();
-            const auto colsize = convertedImage->GetHeight();
+            const auto XPadding = pResultImage->GetXPadding();
+            const auto YPadding = pResultImage->GetYPadding();
+            const auto rowsize = pResultImage->GetWidth();
+            const auto colsize = pResultImage->GetHeight();
 
             // Image data contains padding. When allocating cv::Mat container size, you need to account for the X,Y
 			//XPadding: 0; YPadding: 0; stride: 7344
-            Mat cvImg = Mat((int)(colsize + YPadding), (int)(rowsize + XPadding), CV_8UC3, convertedImage->GetData(), convertedImage->GetStride());
+            Mat cvImg = Mat((int)(colsize + YPadding), (int)(rowsize + XPadding), CV_8UC1, pResultImage->GetData(), pResultImage->GetStride());
 
 			// need to deep copy, otherwise, the two images are the same
 			cvImgVec_[cameraID] = cvImg.clone();
+			//Mat roi = (*concatImg)(Rect(cameraID*2448, 0, 2448, 2048));
+			//cvImg.copyTo(roi);
 
         }
 
@@ -396,7 +445,6 @@ void FlirBlackFlySCameraControl::GrabFrame(CameraPtr pCam, unsigned int cameraID
     }
 
 }
-
 
 // This function configures the camera to use a trigger. First, trigger mode is
 // set to off in order to select the trigger source. Once the trigger source

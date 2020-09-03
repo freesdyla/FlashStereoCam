@@ -29,20 +29,28 @@ public:
     typedef high_resolution_clock Time;
 	typedef high_resolution_clock::time_point TP;
     typedef duration<double> SecD;
+
+
+
+	typedef vector<pair<Mat,string>> ImageNamePairVec;
+
+	vector<ImageNamePairVec> inpvVec_;
 	
 	SystemPtr system_;
 
 	CameraList camList_;
 
-	std::vector<std::thread> grabThreadVec_;
+	std::vector<thread> grabThreadVec_;
 
-	std::vector<std::thread> triggerThreadVec_;
+	vector<thread> saveThreadVec_;
 
-	std::atomic<bool> streaming_;	
+	vector<thread> triggerThreadVec_;
 
-	std::mutex update_mutex_;
+	atomic<bool> streaming_;	
 
-	std::vector<CameraPtr> pCamVec_;
+	vector<CameraPtr> pCamVec_;
+
+	mutex saveMutex_;
 
 	std::vector<gcstring> SNVec_;
 
@@ -54,9 +62,10 @@ public:
 	int Start();
 	int Stop();
 	int ConfigureTrigger(INodeMap& nodeMap);
-	void GrabFrame(CameraPtr pCam, unsigned int cameraID);
+	void GrabFrame(CameraPtr pCam, unsigned int cameraID/*, Mat *concatImg*/);
 	void StreamByTrigger();
 	int setExposureTime(double duration_ms);
+	void SaveImage();
 
 };
 

@@ -6,6 +6,14 @@ FlirBlackFlySCameraControl::FlirBlackFlySCameraControl()
 	streaming_ = false;
 	// Retrieve singleton reference to system object
 	system_ = System::GetInstance();
+
+	cv::FileStorage fs("parameters.yml", cv::FileStorage::READ);
+	if (fs.isOpened())
+	{
+		fs["gain"] >> gain_;
+		fs["exposure"] >> exposure_;
+	}
+	fs.release();
 }
 
 FlirBlackFlySCameraControl::~FlirBlackFlySCameraControl()
@@ -159,8 +167,8 @@ int FlirBlackFlySCameraControl::Start()
 		    cout << "Exposure mode timed..." << endl;
 
 			//unit microseconds
-			pCam->ExposureTime.SetValue(700.);
-			pCam->Gain.SetValue(30.);
+			pCam->ExposureTime.SetValue(exposure_);
+			pCam->Gain.SetValue(gain_);
 			pCam->GammaEnable.SetValue(false);
 
 		    CEnumerationPtr ptrAcquisitionMode = nodeMap.GetNode("AcquisitionMode");
@@ -209,10 +217,18 @@ int FlirBlackFlySCameraControl::Stop()
 	for(auto & t: grabThreadVec_)
 		t.join();
 
+	saving_.store(false);
+
+
+	for(auto & t: saveThreadVec_)
+		t.join();
+
 
 	triggerThreadVec_.clear();
 
 	grabThreadVec_.clear();
+
+	saveThreadVec_.clear();
 
 	pCamVec_.clear();
 
@@ -253,7 +269,7 @@ void FlirBlackFlySCameraControl::StreamByTrigger()
 
 	cvImgVec_.resize(numCam);
 
-
+	saving_ = true;
 	saveThreadVec_.push_back(std::thread(&FlirBlackFlySCameraControl::SaveImage, this));
 	
 	while(streaming_.load())
@@ -269,7 +285,7 @@ void FlirBlackFlySCameraControl::StreamByTrigger()
 		gpioExport(pin16);
 		gpioSetDirection(pin16, outputPin);
 		gpioSetValue(pin16, on);
-		usleep(500);
+		usleep(1000);
 		gpioSetValue(pin16, off);     
 		gpioUnexport(pin16);
 #endif
@@ -328,9 +344,28 @@ void FlirBlackFlySCameraControl::StreamByTrigger()
 		for(int i=0; i<cvImgVec_.size(); i++)
 		{
 
-#if 0
+#if 1
+			GpuMat gpuImg, gpuColorImg;
+			if(!cvImgVec_[i].empty())
+			{
+				gpuImg.upload(cvImgVec_[i]);
+				cuda::demosaicing(gpuImg, gpuColorImg, COLOR_BayerRG2BGR_MHT);
+				//cv::cuda::threshold(gpuImg, gpuColorImg, 128.0, 255.0, THRESH_BINARY);
+			}
+
+
+
+			//namedWindow(SNVec_[i].c_str(), WINDOW_OPENGL);	// need to build opencv with openGL support
+			//imshow(SNVec_[i].c_str(), gpuColorImg);
+			//waitKey(2);
+			
+			Mat colorImg;
+			gpuColorImg.download(colorImg);
+#endif
+
+#if 1
 			Mat resizedImg;
-			resize(cvImgVec_[i], resizedImg, Size(), 0.25, 0.25);
+			resize(colorImg, resizedImg, Size(), 0.25, 0.25);
 			string name = to_string(i);
 			imshow(SNVec_[i].c_str(), resizedImg);
 			waitKey(2);
@@ -345,27 +380,25 @@ void FlirBlackFlySCameraControl::StreamByTrigger()
 
 #endif
 
+#if 0
+		// save image to buffer
 		saveMutex_.lock();
 		inpvVec_.push_back(imgNamePairVec);
-		std::cout<<"bs: "<< inpvVec_.size()<<" ";
-		
+		std::cout<<"bs: "<< inpvVec_.size()<<" cnt:"<< imageCnt<<" ";
 		saveMutex_.unlock();
+#endif
 
 		TP t1 = Time::now();
 		SecD duration = duration_cast<SecD>(t1-t0);
 		cout<<duration.count()<<" s\n";	
 	}
 
-	for(auto &t: saveThreadVec_)
-		t.join();
-
-	saveThreadVec_.clear();
 
 }
 
 void FlirBlackFlySCameraControl::SaveImage()
 {
-	while(streaming_.load())
+	while(saving_.load())
 	{
 		ImageNamePairVec imgNamePair;
 
@@ -379,6 +412,7 @@ void FlirBlackFlySCameraControl::SaveImage()
 		}
 
 		saveMutex_.unlock();
+		
 
 		for(auto &imgName : imgNamePair)
 		{
@@ -425,7 +459,6 @@ void FlirBlackFlySCameraControl::GrabFrame(CameraPtr pCam, unsigned int cameraID
 			cvImgVec_[cameraID] = cvImg.clone();
 			//Mat roi = (*concatImg)(Rect(cameraID*2448, 0, 2448, 2048));
 			//cvImg.copyTo(roi);
-
         }
 
 

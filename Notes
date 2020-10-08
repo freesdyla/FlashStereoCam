@@ -1,0 +1,7 @@
+save to onboard mem, grayscale: single thread 0.27s
+save to SSD (FAT) grayscale: single thread 0.5s
+save to SSD (ext4) grascale: single thread 0.27s
+save to SSD (ext4) color: single thread 0.4s
+retrieve single thread with RGB2GRAY: 0.1s
+retrieve single thread: 0.05s
+spawn two threads in a thread streaming: 0.05s
